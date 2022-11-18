@@ -19,7 +19,6 @@ from loguru import logger
 from torch import Tensor
 from tree import map_structure
 
-from avalon.agent.common import wandb_lib
 from avalon.agent.common.envs import build_env
 from avalon.agent.common.get_algorithm_cls import get_algorithm_cls
 from avalon.agent.common.params import EnvironmentParams
@@ -96,7 +95,7 @@ class AsyncRolloutManager:
             # This basically just gets eaten
             raise
 
-    def entrypoint(self, shutdown_event: multiprocessing.synchronize.Event, wandb_queue) -> None:  # type: ignore[no-untyped-def]
+    def entrypoint(self, shutdown_event: multiprocessing.synchronize.Event, wandb_queue, logger) -> None:  # type: ignore[no-untyped-def]
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
         torch.set_num_threads(1)
@@ -118,7 +117,7 @@ class AsyncRolloutManager:
 
         if self.params.resume_from_run:
             project = self.params.resume_from_project if self.params.resume_from_project else self.params.project
-            checkpoint = wandb_lib.download_file(
+            checkpoint = logger.download_file(
                 self.params.resume_from_run, project, self.params.resume_from_filename
             )
             model.load_state_dict(torch.load(checkpoint, map_location=rollout_device))

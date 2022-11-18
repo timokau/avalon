@@ -5,6 +5,9 @@ import attr
 import gym.spaces
 import torch
 
+from avalon.agent.common.experiment_tracking import ExperimentTracker
+from avalon.agent.common.experiment_tracking import Wandb
+
 
 class ClippedNormalMode(Enum):
     NO_CLIPPING = "NO_CLIPPING"
@@ -45,6 +48,7 @@ class Params:
     log_freq_media: int = 250
     group: Optional[str] = None
     suggestion_uuid: str = ""  # for use by BONES and friends
+    tracker_constructor = None,
 
     # environment
     env_params: EnvironmentParams = EnvironmentParams()

@@ -5,12 +5,12 @@ import warnings
 from functools import partial
 from pathlib import Path
 from typing import Iterator
+from typing import Optional
 
 import attr
 import torch
 from torch.utils.data import DataLoader
 
-from avalon.agent.common import wandb_lib
 from avalon.agent.common.dataloader import ReplayDataset
 from avalon.agent.common.dataloader import worker_init_fn
 from avalon.agent.common.params import DmcEnvironmentParams
@@ -20,6 +20,7 @@ from avalon.agent.common.storage import StorageMode
 from avalon.agent.common.trainer import Trainer
 from avalon.agent.common.types import BatchSequenceData
 from avalon.agent.common.util import pack_1d_list
+from avalon.agent.common.experiment_tracking import ExperimentTracker
 from avalon.agent.common.worker import RolloutManager
 from avalon.agent.dreamer.params import DreamerParams
 from avalon.agent.dreamer.params import OffPolicyParams
@@ -33,10 +34,10 @@ class DreamerTrainer(Trainer[OffPolicyParams]):
     This results in a fixed constant ratio between training and env steps.
     """
 
-    def __init__(self, params: OffPolicyParams):
+    def __init__(self, params: OffPolicyParams, tracker: Optional[ExperimentTracker]):
         self.wandb_queue = queue.Queue()  # type: ignore[var-annotated]
         self.train_rollout_dir = str(Path(params.data_dir) / "train" / str(uuid.uuid4()))
-        super().__init__(params)
+        super().__init__(params, tracker)
 
         # Prefill so we have enough steps to form a first batch
         rollout_steps = params.prefill_steps // params.num_workers
@@ -99,7 +100,7 @@ class DreamerTrainer(Trainer[OffPolicyParams]):
         super().train_step()
         assert self.i == old_i + 1, "Off-policy algorithms must increment i by only 1"
 
-        wandb_lib.log_from_queue(self.wandb_queue, prefix=f"rollout/")
+        self.tracker.log_from_queue(self.wandb_queue, prefix=f"rollout/")
 
     @property
     def frames_per_batch(self):

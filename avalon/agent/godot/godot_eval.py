@@ -20,7 +20,7 @@ from matplotlib import pyplot as plt
 from matplotlib.pyplot import bar
 from numpy import typing as npt
 
-from avalon.agent.common import wandb_lib
+from avalon.agent.common import experiment_tracking
 from avalon.agent.common.params import Params
 from avalon.agent.common.storage import LambdaStorage
 from avalon.agent.common.storage import StorageMode
@@ -28,7 +28,7 @@ from avalon.agent.common.types import Algorithm
 from avalon.agent.common.types import StepData
 from avalon.agent.common.worker import RolloutManager
 from avalon.agent.godot.godot_gym import GodotEnvironmentParams
-from avalon.common.log_utils import logger
+from avalon.common.log_utils import loggen
 from avalon.contrib.s3_utils import TEMP_BUCKET_NAME
 from avalon.contrib.s3_utils import SimpleS3Client
 from avalon.contrib.utils import TEMP_DIR
@@ -39,7 +39,10 @@ RESULT_TAG = "DATALOADER:0 TEST RESULTS"
 
 
 def log_rollout_stats_packed(
-    packed_rollouts: Dict[str, npt.NDArray], infos: Dict[int, List[Dict[str, npt.NDArray]]], i: int
+    packed_rollouts: Dict[str, npt.NDArray],
+    infos: Dict[int, List[Dict[str, npt.NDArray]]],
+    i: int,
+    tracker: experiment_tracking.ExperimentTracker,
 ) -> None:
     successes: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
     keys = ["success", "difficulty"]
@@ -51,8 +54,8 @@ def log_rollout_stats_packed(
     # Data is a dict (task) of dicts (keys) of lists
     for task, x in successes.items():
         for field, y in x.items():
-            wandb_lib.log_histogram(f"train/{task}/{field}", y, i, hist_freq=10)
-        wandb_lib.log_scalar(f"train/{task}/num_episodes", len(y), i)
+            tracker.log_histogram(f"train/{task}/{field}", y, i, hist_freq=10)
+        tracker.log_scalar(f"train/{task}/num_episodes", len(y), i)
 
 
 def log_rollout_stats(rollouts: List[List[StepData]], i: int) -> None:
@@ -68,8 +71,8 @@ def log_rollout_stats(rollouts: List[List[StepData]], i: int) -> None:
     # Data is a dict (task) of dicts (keys) of lists
     for task, x in successes.items():
         for field, y in x.items():
-            wandb_lib.log_histogram(f"train/{task}/{field}", y, i, hist_freq=10)
-        wandb_lib.log_scalar(f"train/{task}/num_episodes", len(y), i)
+            experiment_tracking.log_histogram(f"train/{task}/{field}", y, i, hist_freq=10)
+        experiment_tracking.log_scalar(f"train/{task}/num_episodes", len(y), i)
 
 
 Episode = List[StepData]
@@ -99,7 +102,7 @@ def log_video_by_difficulty(
         infix += "/"
     difficulty_bin_name = get_difficulty_bin_name(difficulty_bin)
     video = torch.stack([step.observation["rgbd"] for step in episode])
-    wandb_lib.log_video(f"{prefix}/videos/{infix}{difficulty_bin_name}", video, step=None, normalize=True, freq=1)
+    experiment_tracking.log_video(f"{prefix}/videos/{infix}{difficulty_bin_name}", video, step=None, normalize=True, freq=1)
 
 
 def log_success_by_difficulty(

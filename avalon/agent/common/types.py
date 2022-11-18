@@ -18,6 +18,7 @@ from torch import Tensor
 from avalon.agent.common.params import Params
 from avalon.agent.common.util import pack_1d_list
 from avalon.agent.common.util import pack_2d_list
+from avalon.agent.common.experiment_tracking import ExperimentTracker
 
 Info = Dict[str, Any]
 Observation = Dict[str, Tensor]  # represents a single timestep. atoms can have any shape
@@ -102,11 +103,12 @@ ParamsType = TypeVar("ParamsType", bound=Params)
 class Algorithm(torch.nn.Module, ABC, Generic[ParamsType]):
     step_data_type: Type = StepData
 
-    def __init__(self, params: ParamsType, obs_space: gym.spaces.Dict, action_space: gym.spaces.Dict):
+    def __init__(self, params: ParamsType, obs_space: gym.spaces.Dict, action_space: gym.spaces.Dict, tracker: ExperimentTracker):
         super().__init__()
         self.params = params
         self.obs_space = obs_space
         self.action_space = action_space
+        self.tracker = tracker
 
     @abstractmethod
     def rollout_step(
