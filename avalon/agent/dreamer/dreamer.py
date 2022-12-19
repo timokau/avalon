@@ -53,6 +53,7 @@ class Dreamer(Algorithm[DreamerParams]):
         action_space: gym.spaces.Dict,
         tracker: ExperimentTracker,
     ):
+        action_space = gym.spaces.Dict({k: v for (k, v) in action_space.spaces.items() if k != "test"})
         super().__init__(params, obs_space, action_space, tracker)
 
         self._encode = HybridEncoder(obs_space, mlp_hidden_dim=self.params.encoder_mlp_hidden_size)
@@ -124,6 +125,7 @@ class Dreamer(Algorithm[DreamerParams]):
         self,
         next_obs: ObservationBatch,
         dones: Tensor,
+        # Which workers are ready
         indices_to_run: list[bool],
         exploration_mode: str,
     ) -> Tuple[ActionBatch, AlgorithmInferenceExtraInfoBatch]:
@@ -144,9 +146,11 @@ class Dreamer(Algorithm[DreamerParams]):
                 self.action_space.seed(seed)
             prev_action = self.action_space.sample()
             prev_action = map_structure(lambda x: torch.tensor(x, device=device), prev_action)
+            # Repeat random action for each batch member
             prev_action = map_structure(lambda x: repeat(x, "... -> b ...", b=batch_size), prev_action)
             self.last_rollout_state = (prev_latent, prev_action)
 
+        # Every observation item is a tensor with batch dimension
         # next_obs = {k: v[indices_to_run] for k, v in next_obs.items()}
         # Check the batch sizes match - that we're not carrying over an old rollout state.
         assert dones.shape[0] == flatten(self.last_rollout_state)[0].shape[0]
@@ -157,7 +161,7 @@ class Dreamer(Algorithm[DreamerParams]):
         dones = dones & indices_to_run_torch
         dones = dones.to(dtype=torch.float32)
 
-        # Mask the state to 0 for any envs that have finished?
+        # Mask the state to 0 for any envs that have finished? (except the ones that are not running this step)
         mask = 1 - dones
 
         # we need this because the action can have a variable number of dims
@@ -166,6 +170,7 @@ class Dreamer(Algorithm[DreamerParams]):
             extra_dims = (1,) * (x.dim() - 1)
             return x * vector.view(-1, *extra_dims)
 
+        # Mask states that are done (except those that will not run this time)
         self.last_rollout_state = map_structure(
             lambda x: multiply_vector_along_tensor_batch_dim(x, mask) if x is not None else x, self.last_rollout_state
         )
@@ -175,12 +180,19 @@ class Dreamer(Algorithm[DreamerParams]):
         action, new_state = self.policy(next_obs, self.last_rollout_state, mode=exploration_mode)
         # action, new_state = self.policy(next_obs, sliced_state, mode="explore")
 
+        # Update only those states in last_rollout_state that were supposed to be run
         # Not sure if map_structure works nicely with inplace operations, so we'll do it manually.
         for k1, v1 in enumerate(self.last_rollout_state):
             for k2, v2 in v1.items():
                 v2[indices_to_run] = new_state[k1][k2][indices_to_run]
 
-        action = map_structure(lambda x: x.cpu(), action)
+        def try_cpu(val):
+            try:
+                return val.cpu()
+            except AttributeError:
+                return val
+
+        action = map_structure(try_cpu, action)
         return action, AlgorithmInferenceExtraInfoBatch()
 
     def reset_state(self) -> None:
@@ -207,15 +219,17 @@ class Dreamer(Algorithm[DreamerParams]):
             action = self._actor(feat).mode()
         else:
             assert False
+        # latent is a distribution (mean+std), feat is sampled
+        action["test"] = torch.tensor([[42]], device=action[list(action.keys())[0]].device)
+        print(f"Feat = {feat}; latent = {latent}; action = {action}")
         state = (latent, action)
         return action, state
 
     def _imagine_ahead(self, start: LatentBatch, dones: Tensor) -> dict[str, Any]:
-        # In the sequence, at a given index, it's an (action -> state) pair. action comes first.
-        # Thus the dummy "0" action at the front.
-
         start = {k: rearrange(v, "b t n -> (b t) n") for k, v in start.items()}
         start["feat"] = self._dynamics.get_feat(start)
+        # In the sequence, at a given index, it's an (action -> state) pair. action comes first.
+        # Thus the dummy "0" action at the front.
         start["action"] = {k: torch.zeros_like(v) for k, v in self._actor(start["feat"]).rsample().items()}  # type: ignore
         seq = {k: [v] for k, v in start.items()}
         for _ in range(self.params.horizon):
@@ -235,6 +249,7 @@ class Dreamer(Algorithm[DreamerParams]):
             true_first *= self.params.discount
             disc = torch.cat([true_first[None], disc[1:]], 0)
         else:
+            # Always pretend like we predicted pcont=1
             disc = self.params.discount * torch.ones(seq_packed["feat"].shape[:-1], device=seq_packed["feat"].device)
         seq_packed["discount"] = disc
         # Shift discount factors because they imply whether the following state
@@ -262,14 +277,16 @@ class Dreamer(Algorithm[DreamerParams]):
         # This is where the loop over all timesteps happens
         post, prior = self._dynamics.observe(embed, actions)
         feat = self._dynamics.get_feat(post)
+        # TODO why? Shouldn't this be batch_size?
         assert len(feat.shape) == 3
-        obs_pred = self._decode(feat)
+        obs_pred = self._decode(feat) # "feat" contains all information necessary to reconstruct (Normal distribution over) obs
         # Reinterpret all but the batch dim (no time dim here)
         # Note: log_likelihood of a Normal with constant std can be reinterpreted as a scaled MSE.
         # is a Normal with std 1 appropriate for vectors too? I guess why not, esp since MSE would seem appropriate.
         obs_dists = {k: Independent(Normal(mean, 1), len(mean.shape) - 2) for k, mean in obs_pred.items()}
         obs_likelihoods = {k: v.log_prob(next_obs[k]) for k, v in obs_dists.items()}
         assert all([v.shape == (batch_size, timesteps) for v in obs_likelihoods.values()])
+        # Don't try to autoencode next obs if there is no next obs
         autoencoder_mask = 1 - is_terminal.int()
         assert autoencoder_mask.shape == (batch_size, timesteps)
 
@@ -525,6 +542,7 @@ class Dreamer(Algorithm[DreamerParams]):
                 # Then do an imagination rollout from there
                 actual_actions = {k: rearrange(v[:batch_size, 5:], "b t ... -> t b ...") for k, v in actions.items()}
                 prior = self._dynamics.imagine(actual_actions, init)
+                # Open loop -> no observations
                 openl = self._decode(self._dynamics.get_feat(prior))[k][:, :, :3]
                 # First 5 frames are recon, next are imagination
                 model = torch.cat([recon[:, :5] + 0.5, openl + 0.5], 1)

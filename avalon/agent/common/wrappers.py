@@ -329,11 +329,11 @@ class NormalizeActions(gym.ActionWrapper):
                 self.action_space[k] = gym.spaces.Box(new_low, new_high, dtype=np.float32)
 
     def action(self, action: DictActionType) -> DictActionType:
-        for k, v in action.items():
+        for k, v in self.action_space.spaces.items():
             if isinstance(self.action_space[k], gym.spaces.Box):
                 mask, low, high = self.bounds[k]
-                new = (v + 1) / 2 * (high - low) + low
-                action[k] = np.where(mask, new, v)
+                new = (action[k] + 1) / 2 * (high - low) + low
+                action[k] = np.where(mask, new, action[k])
         return action
 
     def reverse_action(self, action: DictActionType) -> DictActionType:

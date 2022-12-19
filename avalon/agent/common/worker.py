@@ -274,9 +274,13 @@ class RolloutManager:
             self.storage.add_timestep_samples(step_data_batch)
 
     def send_action_and_request_step(self, step_actions: ActionBatch) -> None:
+        print(f"Sending: {step_actions} to {self.workers} workers")
         for i, worker in enumerate(self.workers):
+            def process(val):
+                print(f"Processing {val}")
+                return val[i]
             if worker.ready_for_new_step and not worker.completed_rollout:
-                worker.send_step(map_structure(lambda x: x[i], step_actions))
+                worker.send_step(map_structure(process, step_actions))
                 worker.ready_for_new_step = False
 
     def run_inference(self, exploration_mode: str) -> Tuple[ActionBatch, AlgorithmInferenceExtraInfoBatch]:
@@ -378,6 +382,7 @@ class EnvironmentContainer:
             for k, v in params.observation_space.spaces.items()
         }
 
+    # FIXME pass latent here -> dict action space?
     def get_step_data(self, actions: Action) -> Tuple[Observation, bool, StepData, str]:
         result = self.get_result()
         received_obs, reward, terminated, truncated, info, episode_id = result
